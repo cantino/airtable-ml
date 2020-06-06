@@ -5,3 +5,9 @@ yarn
 block run
 ```
 
+
+## TODO:
+* Cross Validation
+* Allow application to a different table.
+* Ensure all fields still exist in the table.
+* Ensure (early) that prediction and output fields are of the same type.

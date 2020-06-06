@@ -1,21 +1,34 @@
 import React, {useState} from "react";
 import {Field, FieldType, Table, Record} from "@airtable/blocks/models";
-import {CrossValidate, NeuralNetworkGPU} from "brain.js";
+import brain, {INeuralNetworkJSON, INeuralNetworkState, NeuralNetwork} from "brain.js";
 import {Button, useRecords} from "@airtable/blocks/ui";
 
 interface TrainerProps {
     table: Table,
     trainingField: Field,
-    featureFields: Array<Field>
+    outputField: Field,
+    featureFields: Array<Field>,
+    networkJSON: INeuralNetworkJSON | null,
+    fieldData: FieldData | null,
+    onTrained(netJSON: [INeuralNetworkJSON, FieldData]): void,
+}
+
+interface PredictorProps {
+    table: Table,
+    outputField: Field,
+    trainingField: Field,
+    featureFields: Array<Field>,
+    networkJSON: INeuralNetworkJSON,
+    fieldData: FieldData
 }
 
 interface NumericFieldInfoEntry {
     type: "numeric";
+    airtableType: FieldType;
     max: number;
     min: number;
-    // sum: number;
-    // count: number;
     parse(input: any): number | '__missing__';
+    output(input: number, fd: NumericFieldInfoEntry): any;
 }
 
 interface CategoricalVariants {
@@ -24,110 +37,140 @@ interface CategoricalVariants {
 
 interface CategoricalFieldInfoEntry {
     type: "categorical";
+    airtableType: FieldType;
     parse(input: any): string | '__missing__';
     variantCount: number;
     variants: CategoricalVariants;
+    output(input: string, fd: Field): string;
 }
 
-interface FieldData {
+export interface FieldData {
     [propName: string]: NumericFieldInfoEntry | CategoricalFieldInfoEntry
+}
+
+interface TrainingRows {
+    input: object,
+    output: object
 }
 
 const isNumber = value => typeof value === 'number' && value === value && value !== Infinity && value !== -Infinity;
 
-function makeTrainingData(table: Table, trainingField: Field, featureFields: Field[], records: Record[]) {
+function fieldDataForType(type: FieldType): NumericFieldInfoEntry | CategoricalFieldInfoEntry {
+    let result = null;
+    switch(type) {
+        case FieldType.AUTO_NUMBER:
+        case FieldType.CURRENCY:
+        case FieldType.COUNT:
+        case FieldType.DURATION:
+        case FieldType.NUMBER:
+        case FieldType.PERCENT:
+        case FieldType.RATING:
+            result = {
+                type: 'numeric',
+                airtableType: type,
+                max: -Infinity,
+                min: Infinity,
+                parse: (number) => isNumber(number) ? number : '__missing__',
+                output: (number, fd) => number * (fd.max - fd.min) + fd.min,
+            };
+            break;
+        case FieldType.CHECKBOX:
+            result = {
+                type: 'numeric',
+                airtableType: type,
+                max: 1.0,
+                min: 0.0,
+                parse: (checked) => checked ? 1.0 : 0.0,
+                output: (number, _fd) => number >= 0.5
+            };
+            break;
+        case FieldType.CREATED_TIME:
+        case FieldType.DATE:
+        case FieldType.DATE_TIME:
+        case FieldType.LAST_MODIFIED_TIME:
+            result = {
+                type: 'numeric',
+                airtableType: type,
+                max: -Infinity,
+                min: Infinity,
+                parse: (dateString) => dateString ? Date.parse(dateString) : '__missing__',
+                output: (number, fd) => new Date( number * (fd.max - fd.min) + fd.min)
+            };
+            break;
+        case FieldType.EMAIL:
+        case FieldType.PHONE_NUMBER:
+        case FieldType.SINGLE_LINE_TEXT:
+        case FieldType.URL:
+            result = {
+                type: 'categorical',
+                airtableType: type,
+                variants: {},
+                variantCount: 0,
+                parse: (s) => s ? s.toString().trim().toLowerCase() : '__missing__',
+                output: (string, _field: Field) => string
+            };
+            break;
+        case FieldType.SINGLE_COLLABORATOR:
+        case FieldType.SINGLE_SELECT:
+            result = {
+                type: 'categorical',
+                airtableType: type,
+                variants: {},
+                variantCount: 0,
+                parse: (s) => s ? s.id : '__missing__',
+                output: (string, field: Field) => {
+                    return { name: string };
+                    // if (field.options.choices) {
+                    //     return (field.options.choices as any[]).find(({name}) => name === string).id;
+                    // } else {
+                    //     console.log("Unable to find a match for variant ", string, " in ", field);
+                    //     return null;
+                    // }
+                }
+            };
+            break;
+        case FieldType.BARCODE:
+        case FieldType.FORMULA:
+        case FieldType.MULTILINE_TEXT:
+        case FieldType.MULTIPLE_ATTACHMENTS:
+        case FieldType.MULTIPLE_COLLABORATORS:
+        case FieldType.MULTIPLE_LOOKUP_VALUES:
+        case FieldType.MULTIPLE_RECORD_LINKS:
+        case FieldType.MULTIPLE_SELECTS:
+        case FieldType.RICH_TEXT:
+        case FieldType.ROLLUP:
+        default:
+            console.warn(`Unable to handle field of type ${type} at this time.`);
+            break;
+    }
+
+    return result;
+}
+
+function makeTrainingData(table: Table, trainingField: Field, outputField: Field, featureFields: Field[], records: Record[]): [TrainingRows[], FieldData] {
     const fields = [...featureFields, trainingField];
     const fieldData: FieldData = {};
 
-    fields.forEach(field => {
-        switch(field.type) {
-            case FieldType.AUTO_NUMBER:
-            case FieldType.CURRENCY:
-            case FieldType.COUNT:
-            case FieldType.DURATION:
-            case FieldType.NUMBER:
-            case FieldType.PERCENT:
-            case FieldType.RATING:
-                fieldData[field.id] = {
-                    type: 'numeric',
-                    max: -Infinity,
-                    min: Infinity,
-                    // sum: 0,
-                    // count: 0,
-                    parse: (number) => isNumber(number) ? number : '__missing__'
-                };
-                break;
-            case FieldType.CHECKBOX:
-                fieldData[field.id] = {
-                    type: 'numeric',
-                    max: -Infinity,
-                    min: Infinity,
-                    // sum: 0,
-                    // count: 0,
-                    parse: (checked) => checked ? 1.0 : 0.0
-                };
-                break;
-            case FieldType.CREATED_TIME:
-            case FieldType.DATE:
-            case FieldType.DATE_TIME:
-            case FieldType.LAST_MODIFIED_TIME:
-                fieldData[field.id] = {
-                    type: 'numeric',
-                    max: -Infinity,
-                    min: Infinity,
-                    // sum: 0,
-                    // count: 0,
-                    parse: (dateString) => dateString ? Date.parse(dateString) : '__missing__'
-                };
-                break;
-            case FieldType.EMAIL:
-            case FieldType.PHONE_NUMBER:
-            case FieldType.SINGLE_LINE_TEXT:
-            case FieldType.URL:
-                fieldData[field.id] = {
-                    type: 'categorical',
-                    variants: {},
-                    variantCount: 0,
-                    parse: (s) => s ? s.toString().trim().toLowerCase() : '__missing__'
-                };
-                break;
-            case FieldType.SINGLE_COLLABORATOR:
-            case FieldType.SINGLE_SELECT:
-                fieldData[field.id] = {
-                    type: 'categorical',
-                    variants: {},
-                    variantCount: 0,
-                    parse: (s) => s ? s.id : '__missing__'
-                };
-                break;
-            case FieldType.BARCODE:
-            case FieldType.FORMULA:
-            case FieldType.MULTILINE_TEXT:
-            case FieldType.MULTIPLE_ATTACHMENTS:
-            case FieldType.MULTIPLE_COLLABORATORS:
-            case FieldType.MULTIPLE_LOOKUP_VALUES:
-            case FieldType.MULTIPLE_RECORD_LINKS:
-            case FieldType.MULTIPLE_SELECTS:
-            case FieldType.RICH_TEXT:
-            case FieldType.ROLLUP:
-            default:
-                console.warn(`Unable to handle field of type ${field.type} at this time.`);
-                break;
-        }
+    fields.forEach((field: Field) => {
+        const result = fieldDataForType(field.type);
+        if (result) fieldData[field.id] = result;
     });
 
-    const trainingRows = [];
+    const trainingRows: TrainingRows[] = [];
     records.forEach((record) => {
+        // Skip if we don't have a value in our trainingField.
+        if (!record.getCellValue(trainingField)) return;
+
         const trainingRow = { input: {}, output: {} };
         fields.forEach(field => {
             const fieldRecord = fieldData[field.id];
+            if (!fieldRecord) return;
+
             const cellValue = record.getCellValue(field);
-            const parsedValue = fieldRecord.parse(cellValue);
+            let parsedValue = fieldRecord.parse(cellValue);
             switch (fieldRecord.type) {
                 case "numeric":
                     if (typeof parsedValue === "number") {
-                        // fieldRecord.sum += parsedValue;
-                        // fieldRecord.count += 1;
                         if (parsedValue < fieldRecord.min) {
                             fieldRecord.min = parsedValue;
                         } else if (parsedValue > fieldRecord.max) {
@@ -142,6 +185,10 @@ function makeTrainingData(table: Table, trainingField: Field, featureFields: Fie
                     break;
                 case "categorical":
                     if (parsedValue !== "__missing__") {
+                        if (field.options.choices) {
+                            parsedValue = (field.options.choices as any[]).find(({id}) => id === parsedValue).name;
+                        }
+
                         if (!fieldRecord.variants[parsedValue]) {
                             fieldRecord.variantCount += 1;
                             fieldRecord.variants[parsedValue] = fieldRecord.variantCount;
@@ -162,6 +209,8 @@ function makeTrainingData(table: Table, trainingField: Field, featureFields: Fie
     trainingRows.forEach((trainingRow) => {
         fields.forEach(field => {
             const fieldRecord = fieldData[field.id];
+            if (!fieldRecord) return;
+
             if (fieldRecord.type === "numeric") {
                 if (field === trainingField) {
                     trainingRow.output[field.id] = (trainingRow.output[field.id] - fieldRecord.min) / (fieldRecord.max - fieldRecord.min);
@@ -172,25 +221,161 @@ function makeTrainingData(table: Table, trainingField: Field, featureFields: Fie
         });
     });
 
-    return trainingRows;
+    return [trainingRows, fieldData];
 }
 
-export default function Trainer({ table, trainingField, featureFields }: TrainerProps): JSX.Element {
-    const [net, setNet] = useState(null);
+function predict(table: Table, trainingField: Field, outputField: Field, featureFields: Field[], records: Record[], fieldData: FieldData, network: NeuralNetwork) {
+    const outputFieldEntry = fieldDataForType(outputField.type);
+    const trainingFieldEntry = fieldData[trainingField.id];
+
+    if (!outputFieldEntry || !trainingFieldEntry || outputFieldEntry.airtableType !== trainingFieldEntry.airtableType) {
+        throw new Error("Classify: Training field and output field must have the same types, please reconfigure.");
+    }
+
+    featureFields.forEach((field: Field) => {
+        const freshEntry = fieldDataForType(field.type);
+        if (!freshEntry) return;
+
+        const oldEntry = fieldData[field.id];
+
+        if ((freshEntry && !oldEntry) || freshEntry.airtableType !== oldEntry.airtableType) {
+            throw new Error("Classify: Table fields have changed, please retrain.");
+        }
+
+        // Copy the functions over because they don't serialize successfully.
+        Object.keys(freshEntry).forEach((key) => {
+            if (key === 'parse' || key === 'output') {
+                oldEntry[key] = freshEntry[key] as any;
+            }
+        });
+    });
+
+    records.forEach((record) => {
+        const input = {};
+        featureFields.forEach((field: Field) => {
+            const fieldRecord = fieldData[field.id];
+            if (!fieldRecord) return;
+
+            const cellValue = record.getCellValue(field);
+            const parsedValue = fieldRecord.parse(cellValue);
+            switch (fieldRecord.type) {
+                case "numeric":
+                    if (typeof parsedValue === "number") {
+                        input[field.id] = (parsedValue - fieldRecord.min) / (fieldRecord.max - fieldRecord.min);
+                    }
+                    break;
+                case "categorical":
+                    if (parsedValue !== "__missing__") {
+                        input[`${field.id}_${fieldRecord.variants[parsedValue]}`] = 1;
+                    }
+                    break;
+            }
+        });
+
+        const networkOutput = network.run(input);
+        console.log("input: ", input);
+        console.log("output: ", networkOutput);
+
+        let result;
+        if (outputFieldEntry.type === 'numeric') {
+            result = outputFieldEntry.output(Object.values(networkOutput)[0], trainingFieldEntry as NumericFieldInfoEntry);
+        } else {
+            let max: number = -Infinity;
+            let maxKey: null | string = null;
+            Object.keys(networkOutput).forEach((key) => {
+                if (networkOutput[key] > max) {
+                    max = networkOutput[key];
+                    maxKey = key;
+                }
+            })
+            console.log("Max key ", maxKey, " with ", max);
+
+            const tfe = trainingFieldEntry as CategoricalFieldInfoEntry;
+            const keyNumber = parseInt(maxKey.split('_').pop());
+
+            for (const key of Object.keys(tfe.variants)) {
+                if (tfe.variants[key] === keyNumber) {
+                    result = outputFieldEntry.output(key, outputField);
+                }
+            }
+
+            if (!result) {
+                console.warn("Unable to find matching variant for record ", record, " with network output ", networkOutput);
+            }
+        }
+
+        console.log(result);
+        if (table.hasPermissionToUpdateRecord(record, { [outputField.id]: result })) {
+            table.updateRecordAsync(record, { [outputField.id]: result }).catch((e) => console.error(e));
+        }
+    });
+}
+
+export function Trainer({ table, trainingField, outputField, featureFields, networkJSON, fieldData, onTrained }: TrainerProps): JSX.Element {
+    const [state, setState] = useState((networkJSON && fieldData) ? "Already trained — Click to retrain" : "Click to train");
     const fields = [...featureFields, trainingField];
     const records = useRecords(table, { fields });
 
     const train = () => {
-        const trainingRows = makeTrainingData(table, trainingField, featureFields, records);
-        const crossValidate = new CrossValidate(NeuralNetworkGPU, {});
-        crossValidate.train(trainingRows, {});
-        const json = crossValidate.toJSON();
-        console.log(json)
-        const net = crossValidate.toNeuralNetwork();
-        setNet(net);
+        try {
+            const [trainingRows, fieldData] = makeTrainingData(table, trainingField, outputField, featureFields, records);
+            console.log(trainingRows);
+            console.log(fieldData);
+
+            const net = new brain.NeuralNetworkGPU();
+            const iterations = 20000;
+            net
+                .trainAsync(trainingRows, {
+                    iterations,
+                    callback: (state: INeuralNetworkState) => setState(`Training... ${state.iterations} / ${iterations} iterations`),
+                    callbackPeriod: iterations / 100,
+                })
+                .then((res) => {
+                    onTrained([net.toJSON(), fieldData]);
+                    console.log(`Training complete: ${res.error} in ${res.iterations} iterations`);
+                    setState(`Trained (error = ${res.error}) — Click to retrain`);
+                })
+                .catch(e => alert(e));
+
+            setState("Training... this may take a few minutes.");
+        } catch(e) {
+            if (e.message.startsWith("Classify")) {
+                setState(e.message);
+            } else {
+                console.error(e);
+                setState("Error");
+            }
+        }
     }
 
     return <div>
-        <Button onClick={train}>{net ? "Retrain" : "Train"}</Button>
+        <Button disabled={state.indexOf("Click") === -1} onClick={train}>{state}</Button>
     </div>;
 }
+
+export function Predictor({ table,  featureFields, networkJSON, fieldData, outputField, trainingField }: PredictorProps): JSX.Element {
+    const [network, setNetwork] = useState<NeuralNetwork>(() => (new brain.NeuralNetworkGPU()).fromJSON(networkJSON));
+    const [state, setState] = useState("Ready");
+    const records = useRecords(table, { fields: [outputField, ...featureFields] });
+
+    const runPrediction = () => {
+        try {
+            predict(table, trainingField, outputField, featureFields, records, fieldData, network);
+            // fieldData
+            // network
+            // const trainingRows = makeTrainingData(table, trainingField, featureFields, records);
+        } catch (e) {
+            if (e.message.startsWith("Classify")) {
+                setState(e.message);
+            } else {
+                console.error(e);
+                setState("Error");
+            }
+        }
+    }
+
+    return <div>
+        <Button disabled={state.indexOf("Processing") !== -1} onClick={runPrediction}>{state}</Button>
+    </div>;
+}
+

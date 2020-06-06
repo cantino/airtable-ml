@@ -1,8 +1,7 @@
 {
     "dependencies": {
         "@airtable/blocks": "0.0.49",
-        "@tensorflow/tfjs": "^1.7.4",
-        "brain.js": "^2.0.0-beta.1",
+        "brain.js": "1.6.1",
         "react": "^16.9.0",
         "react-dom": "^16.9.0"
     },
