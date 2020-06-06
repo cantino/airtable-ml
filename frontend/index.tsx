@@ -15,7 +15,7 @@ import {INeuralNetworkJSON} from "brain.js";
 
 function WelcomeView() {
     useLoadable(cursor)
-    useWatchable(cursor, ['activeTableId', 'activeViewId', 'selectedRecordIds', 'selectedFieldIds']);
+    useWatchable(cursor, ['activeTableId']);
 
     const globalConfig = useGlobalConfig();
 
@@ -59,18 +59,6 @@ function WelcomeView() {
         <Heading>Predictor</Heading>
         <Heading size="small">To edit your settings, click the settings icon in the upper right.</Heading>
         <Predictor featureFields={featureFields} trainingField={trainingField} outputField={outputField} networkJSON={networkJSON} fieldData={fieldData} table={table}/>
-        <p>
-            Active table: {cursor.activeTableId}
-        </p>
-        <p>
-            Active view: {cursor.activeViewId}
-        </p>
-        <p>
-            Selected records: {cursor.selectedRecordIds.join(', ')}
-        </p>
-        <p>
-            Selected fields: {cursor.selectedFieldIds.join(', ')}
-        </p>
     </div>;
 }
 

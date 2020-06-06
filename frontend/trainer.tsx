@@ -185,7 +185,7 @@ function makeTrainingData(table: Table, trainingField: Field, outputField: Field
                     break;
                 case "categorical":
                     if (parsedValue !== "__missing__") {
-                        if (field.options.choices) {
+                        if (field.options && field.options.choices) {
                             parsedValue = (field.options.choices as any[]).find(({id}) => id === parsedValue).name;
                         }
 
@@ -229,7 +229,7 @@ function predict(table: Table, trainingField: Field, outputField: Field, feature
     const trainingFieldEntry = fieldData[trainingField.id];
 
     if (!outputFieldEntry || !trainingFieldEntry || outputFieldEntry.airtableType !== trainingFieldEntry.airtableType) {
-        throw new Error("Classify: Training field and output field must have the same types, please reconfigure.");
+        throw new Error("Airtable ML: Training field and output field must have the same types, please reconfigure.");
     }
 
     featureFields.forEach((field: Field) => {
@@ -239,7 +239,7 @@ function predict(table: Table, trainingField: Field, outputField: Field, feature
         const oldEntry = fieldData[field.id];
 
         if ((freshEntry && !oldEntry) || freshEntry.airtableType !== oldEntry.airtableType) {
-            throw new Error("Classify: Table fields have changed, please retrain.");
+            throw new Error("Airtable ML: Table fields have changed, please retrain.");
         }
 
         // Copy the functions over because they don't serialize successfully.
@@ -322,10 +322,19 @@ export function Trainer({ table, trainingField, outputField, featureFields, netw
             console.log(trainingRows);
             console.log(fieldData);
 
-            const net = new brain.NeuralNetworkGPU();
-            const iterations = 20000;
+            const inputLayerSize = [...new Set(trainingRows.flatMap((row) => Object.keys(row.input)))].length;
+            const outputLayerSize = [...new Set(trainingRows.flatMap((row) => Object.keys(row.output)))].length;
+            console.log("Input layer size: ", inputLayerSize);
+            console.log("Input layer size: ", outputLayerSize);
+
+            const net = new brain.NeuralNetworkGPU({
+                hiddenLayers: [Math.ceil((inputLayerSize + outputLayerSize) / 2)],
+            });
+            const iterations = 5000;
+
             net
                 .trainAsync(trainingRows, {
+                    log: true,
                     iterations,
                     callback: (state: INeuralNetworkState) => setState(`Training... ${state.iterations} / ${iterations} iterations`),
                     callbackPeriod: iterations / 100,
@@ -337,9 +346,9 @@ export function Trainer({ table, trainingField, outputField, featureFields, netw
                 })
                 .catch(e => alert(e));
 
-            setState("Training... this may take a few minutes.");
+            setState("Training... this may take a few minutes. 😊");
         } catch(e) {
-            if (e.message.startsWith("Classify")) {
+            if (e.message.startsWith("Airtable ML")) {
                 setState(e.message);
             } else {
                 console.error(e);
@@ -365,7 +374,7 @@ export function Predictor({ table,  featureFields, networkJSON, fieldData, outpu
             // network
             // const trainingRows = makeTrainingData(table, trainingField, featureFields, records);
         } catch (e) {
-            if (e.message.startsWith("Classify")) {
+            if (e.message.startsWith("Airtable ML")) {
                 setState(e.message);
             } else {
                 console.error(e);
