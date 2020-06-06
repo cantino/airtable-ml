@@ -42,23 +42,30 @@ function WelcomeView() {
 
     if (!table || !outputField || !trainingField || !featureFields || !networkJSON || !fieldData) {
         return <div>
-            <Heading>Predictor</Heading>
-            <Heading size="small">Welcome to Predictor! Click the settings icon in the upper right to get started.</Heading>
+            <Heading>Airtable ML</Heading>
+            <Heading size="small">Welcome to Airtable ML! Click the settings icon in the upper right to get started.</Heading>
         </div>;
     }
 
     if (tableId !== cursor.activeTableId) {
         return <div>
-            <Heading>Predictor</Heading>
+            <Heading>Airtable ML</Heading>
             <Heading size="small">Please switch to the '{table.name}' table or click on the settings icon in the upper right to select a new one.</Heading>
         </div>;
     }
 
-    // base.tables.length
     return <div>
-        <Heading>Predictor</Heading>
-        <Heading size="small">To edit your settings, click the settings icon in the upper right.</Heading>
-        <Predictor featureFields={featureFields} trainingField={trainingField} outputField={outputField} networkJSON={networkJSON} fieldData={fieldData} table={table}/>
+        <Heading>Airtable ML</Heading>
+        <Heading size="xsmall">To edit your settings, click the settings icon in the upper right.</Heading>
+
+        <Predictor
+            featureFields={featureFields}
+            trainingField={trainingField}
+            outputField={outputField}
+            networkJSON={networkJSON}
+            fieldData={fieldData}
+            table={table}
+        />
     </div>;
 }
 
@@ -69,8 +76,9 @@ function MainWrapper() {
         setIsShowingSettings(!isShowingSettings);
     });
 
-    return <div>
+    return <div style={ { margin: "10px" } }>
         <ViewportConstraint minSize={{width: 325}} />
+
         {isShowingSettings ? <Settings /> : <WelcomeView />}
     </div>
 }

@@ -6,10 +6,12 @@ import {
     FieldPicker, useGlobalConfig
 } from '@airtable/blocks/ui';
 import {cursor, base} from '@airtable/blocks';
-import React from 'react';
+import React, {useState} from 'react';
 import {FieldData, Trainer} from "./trainer";
 import {INeuralNetworkJSON} from "brain.js";
 import MultiFieldPicker, {ACCEPTABLE_TYPES} from "./multi-field-picker";
+import Stepper from "./stepper";
+import {FieldId, TableId} from "@airtable/blocks/types";
 
 export default function Settings(): JSX.Element {
     useLoadable(cursor)
@@ -17,16 +19,16 @@ export default function Settings(): JSX.Element {
 
     const globalConfig = useGlobalConfig();
 
-    const tableId = globalConfig.get('tableId');
+    const tableId = globalConfig.get('tableId') as TableId;
     const table = tableId && base.getTableIfExists(tableId as string);
 
-    const trainingFieldId = globalConfig.get('trainingFieldId');
+    const trainingFieldId = globalConfig.get('trainingFieldId') as FieldId;
     const trainingField = table && trainingFieldId && table.getFieldIfExists(trainingFieldId as string);
 
-    const outputFieldId = globalConfig.get('outputFieldId');
+    const outputFieldId = globalConfig.get('outputFieldId') as FieldId;
     const outputField = table && outputFieldId && table.getFieldIfExists(outputFieldId as string);
 
-    const featureFieldIds = (globalConfig.get('featureFieldIds') || []) as Array<string>;
+    const featureFieldIds = (globalConfig.get('featureFieldIds') || []) as FieldId[];
     let featureFields = table && featureFieldIds && featureFieldIds.map((id) => table.getFieldIfExists(id));
     if (featureFields.some((f) => !f)) featureFields = null;
 
@@ -44,37 +46,42 @@ export default function Settings(): JSX.Element {
         return <div>You do not have permission to update settings for this Block.</div>;
     }
 
-    return <div>
-        <Heading>Setup</Heading>
-        <div>
-            <Heading size="xsmall">Step 1: Select a Table</Heading>
-            <TablePicker
-                table={table}
-                onChange={newTable => {
-                    if (newTable !== tableId) {
-                        globalConfig.setPathsAsync([
-                            {path: ['tableId'], value: newTable.id},
-                            {path: ['trainingFieldId'], value: null},
-                            {path: ['outputFieldId'], value: null},
-                            {path: ['featureFieldIds'], value: []},
-                            {path: ['networkAndFieldsString'], value: null},
-                        ]);
-                    }
-                }}
-                width="320px"
-            />
-        </div>
+    const [step, setStep] = useState(0);
 
-        {table ? (
-            <div>
-                <Heading size="xsmall">Step 2: Select a Field that contains correct prediction examples that you'd like to learn from - only rows with a value in
-                    this field will be trained on</Heading>
-                <FieldPicker
+    const steps = [
+        {
+            name: "Select a Table",
+            description: "Select a table that contains data to train on.",
+            available: () => true,
+            render: () => {
+                return <TablePicker
+                    table={table}
+                    onChange={newTable => {
+                        if (newTable.id !== tableId) {
+                            globalConfig.setPathsAsync([
+                                {path: ['tableId'], value: newTable.id},
+                                {path: ['trainingFieldId'], value: null},
+                                {path: ['outputFieldId'], value: null},
+                                {path: ['featureFieldIds'], value: []},
+                                {path: ['networkAndFieldsString'], value: null},
+                            ]);
+                        }
+                    }}
+                    width="320px"
+                />;
+            }
+        },
+        {
+            name: "Select a prediction Field",
+            description: "Select a field that contains correct predictions to learn from. Only rows with a value in this field will be used.",
+            available: () => table,
+            render: () => {
+                return <FieldPicker
                     table={table}
                     field={trainingField}
                     allowedTypes={ACCEPTABLE_TYPES}
                     onChange={newField => {
-                        if (newField !== trainingFieldId) {
+                        if (newField.id !== trainingFieldId) {
                             globalConfig.setPathsAsync([
                                 {path: ['trainingFieldId'], value: newField.id},
                                 {path: ['networkAndFieldsString'], value: null},
@@ -82,59 +89,85 @@ export default function Settings(): JSX.Element {
                         }
                     }}
                     width="320px"
-                />
-            </div>
-        ) : ""}
-
-        {trainingField ? (
-            <div>
-                <Heading size="xsmall">Step 3: Select an output Field that will be updated with the generated prediction. (This should be
-                    different than the training field from Step 2.)</Heading>
-                <FieldPicker
+                />;
+            }
+        },
+        {
+            name: "Select an output Field",
+            description: "Select an output Field that will be updated with the generated predictions. (This should be different than the training field from the last step.)",
+            available: () => trainingField,
+            render: () => {
+                return <FieldPicker
                     table={table}
                     field={outputField}
                     allowedTypes={ACCEPTABLE_TYPES}
                     onChange={newField => {
-                        if (newField !== outputFieldId) {
+                        if (newField.id !== outputFieldId) {
                             globalConfig.setPathsAsync([
                                 {path: ['outputFieldId'], value: newField.id}
                             ]);
                         }
                     }}
                     width="320px"
-                />
-            </div>
-        ) : ""}
+                />;
+            }
+        },
+        {
+            name: "Select Fields to be used in the analysis",
+            description: "Select Fields that should be studied when making a prediction. Some types of fields are unavailable and are not selectable. Also, we recommend against using text, email, or URL fields unless they only contain a few specific values.",
+            available: () => outputField,
+            render: () => {
+                return <MultiFieldPicker
+                    table={table}
+                    skipFieldIds={[trainingFieldId, outputFieldId]}
+                    fieldIds={featureFieldIds}
+                    onChange={(ids) => {
+                        globalConfig.setPathsAsync([
+                            {path: ['featureFieldIds'], value: ids},
+                            {path: ['networkAndFieldsString'], value: null},
+                        ]);
+                    }}
+                />;
+            }
+        },
+        {
+            name: "Time to train a neural network!",
+            description: "Training the network will take a few minutes.",
+            available: () => featureFields && featureFields.length,
+            render: () => {
+                return <Trainer
+                    table={table}
+                    trainingField={trainingField}
+                    outputField={outputField}
+                    featureFields={featureFields}
+                    trainingOptions={{}}
+                    networkJSON={networkJSON}
+                    fieldData={fieldData}
+                    onTrained={([netJSON, fieldData]) => {
+                        console.log("Setting", netJSON, fieldData);
+                        globalConfig.setPathsAsync([{
+                            path: ['networkAndFieldsString'],
+                            value: JSON.stringify([netJSON, fieldData])
+                        }]);
+                    }}
+                />;
+            }
+        },
+        {
+            name: "Setup complete!",
+            description: "Click the settings button in the upper right again to go back to the main view.",
+            available: () => tableId && trainingFieldId && outputFieldId && (featureFieldIds as Array<string>).length > 0 && networkJSON,
+            render: () => <div />
+        }
+    ];
 
-        {outputField ? (
-            <div>
-                <Heading size="xsmall">Step 4: Select Field(s) to be used in the analysis</Heading>
-                <MultiFieldPicker table={table} fieldIds={featureFieldIds} onChange={(ids) => {
-                    globalConfig.setPathsAsync([
-                        {path: ['featureFieldIds'], value: ids},
-                        {path: ['networkAndFieldsString'], value: null},
-                    ]);
-                }} />
-            </div>
-        ) : ""}
+    return <div>
+        <Heading>Setup Airtable ML</Heading>
 
-        {featureFields && featureFields.length ? (
-            <div>
-                <Heading size="xsmall">Step 5: Time to train a neural network!</Heading>
-                <Trainer table={table} trainingField={trainingField} outputField={outputField}
-                         featureFields={featureFields} networkJSON={networkJSON} fieldData={fieldData}
-                         onTrained={([netJSON, fieldData]) => {
-                             console.log("Setting", netJSON, fieldData);
-                             globalConfig.setPathsAsync([{
-                                 path: ['networkAndFieldsString'],
-                                 value: JSON.stringify([netJSON, fieldData])
-                             }]);
-                         }}/>
-            </div>
-        ) : ""}
-
-        <Heading size="xsmall">
-            {(tableId && trainingFieldId && outputFieldId && (featureFieldIds as Array<string>).length > 0 && networkJSON) ? "Setup complete! Click the settings button again to go back to the main view." : "Please continue setup."}
-        </Heading>
+        <Stepper
+            step={step}
+            steps={steps}
+            onChangeStep={setStep}
+        />
     </div>;
 }

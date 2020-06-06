@@ -1,4 +1,4 @@
-# Airtable ML
+![Airtable ML Logo](docs/airtable-ml.png)
 
 #### An open source, neural network-based Airtable Block for performing automatic prediction & classification.
 
@@ -24,7 +24,6 @@ Video here!
 
 We'd love your open source contributions, especially in the following areas:
 
-* Cleanup UI so it uses a stepper instead of settings.
 * Cross Validation
 * Visualize error rate.
 * Allow stopping.

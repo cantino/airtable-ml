@@ -3,10 +3,15 @@ import {Field, FieldType, Table, Record} from "@airtable/blocks/models";
 import brain, {INeuralNetworkJSON, INeuralNetworkState, NeuralNetwork} from "brain.js";
 import {Button, useRecords} from "@airtable/blocks/ui";
 
+interface TrainingOptions {
+    iterations?: number;
+}
+
 interface TrainerProps {
     table: Table,
     trainingField: Field,
     outputField: Field,
+    trainingOptions: TrainingOptions,
     featureFields: Array<Field>,
     networkJSON: INeuralNetworkJSON | null,
     fieldData: FieldData | null,
@@ -311,7 +316,7 @@ function predict(table: Table, trainingField: Field, outputField: Field, feature
     });
 }
 
-export function Trainer({ table, trainingField, outputField, featureFields, networkJSON, fieldData, onTrained }: TrainerProps): JSX.Element {
+export function Trainer({ table, trainingField, outputField, featureFields, trainingOptions, networkJSON, fieldData, onTrained }: TrainerProps): JSX.Element {
     const [state, setState] = useState((networkJSON && fieldData) ? "Already trained — Click to retrain" : "Click to train");
     const fields = [...featureFields, trainingField];
     const records = useRecords(table, { fields });
@@ -330,7 +335,7 @@ export function Trainer({ table, trainingField, outputField, featureFields, netw
             const net = new brain.NeuralNetworkGPU({
                 hiddenLayers: [Math.ceil((inputLayerSize + outputLayerSize) / 2)],
             });
-            const iterations = 5000;
+            const iterations = trainingOptions.iterations || 5000;
 
             net
                 .trainAsync(trainingRows, {
@@ -364,23 +369,24 @@ export function Trainer({ table, trainingField, outputField, featureFields, netw
 
 export function Predictor({ table,  featureFields, networkJSON, fieldData, outputField, trainingField }: PredictorProps): JSX.Element {
     const [network, setNetwork] = useState<NeuralNetwork>(() => (new brain.NeuralNetworkGPU()).fromJSON(networkJSON));
-    const [state, setState] = useState("Ready");
+    const [state, setState] = useState("Click to generate predictions");
     const records = useRecords(table, { fields: [outputField, ...featureFields] });
 
     const runPrediction = () => {
-        try {
-            predict(table, trainingField, outputField, featureFields, records, fieldData, network);
-            // fieldData
-            // network
-            // const trainingRows = makeTrainingData(table, trainingField, featureFields, records);
-        } catch (e) {
-            if (e.message.startsWith("Airtable ML")) {
-                setState(e.message);
-            } else {
-                console.error(e);
-                setState("Error");
+        setState("Processing...");
+        setTimeout(() => {
+            try {
+                predict(table, trainingField, outputField, featureFields, records, fieldData, network);
+                setState("Done. Click to generate predictions again.");
+            } catch (e) {
+                if (e.message.startsWith("Airtable ML")) {
+                    setState(e.message);
+                } else {
+                    console.error(e);
+                    setState("Error");
+                }
             }
-        }
+        }, 10);
     }
 
     return <div>

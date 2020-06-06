@@ -3,7 +3,7 @@ import {
     useLoadable, Button,
 } from '@airtable/blocks/ui';
 import {cursor, base} from '@airtable/blocks';
-import {FieldType, Table} from "@airtable/blocks/models";
+import {Field, FieldType, Table} from "@airtable/blocks/models";
 import React from 'react';
 import {FieldId} from "@airtable/blocks/types";
 import CSS from 'csstype';
@@ -21,38 +21,39 @@ export const ACCEPTABLE_TYPES = [
     FieldType.SINGLE_SELECT
 ];
 
-export default function MultiFieldPicker({ table, fieldIds, onChange }: { table: Table, fieldIds: FieldId[], onChange(ids: FieldId[]): void}): JSX.Element {
+interface MultiFieldPickerProps {
+    table: Table;
+    skipFieldIds: FieldId[];
+    fieldIds: FieldId[];
+    onChange(ids: FieldId[]): void;
+}
+
+export default function MultiFieldPicker({ table, fieldIds, onChange, skipFieldIds }: MultiFieldPickerProps): JSX.Element {
     useLoadable(cursor)
     useWatchable(cursor, ['selectedFieldIds']);
     const selectedFields = cursor
         .selectedFieldIds
         .map((id) => table.getFieldIfExists(id))
-        .filter((f) => f && ACCEPTABLE_TYPES.indexOf(f.type) > -1);
+        .filter((f) => f && ACCEPTABLE_TYPES.indexOf(f.type) > -1 && skipFieldIds.indexOf(f.id) === -1);
 
     let fields = fieldIds.map((id) => table.getFieldIfExists(id)).filter((f) => f);
 
     return <div>
-        {cursor.selectedFieldIds.length && (
-            <Button onClick={() => onChange(fieldIds.concat(selectedFields.map((f) => f.id)))}>Add {selectedFields.length === 1 ? `${selectedFields.length} selected field` : `${selectedFields.length} selected fields`}</Button>
-        )}
-
-        {fields.length && (
-            <div>
-                <div>
-                    Selected fields:
-                </div>
-                <ul>
-                    {fields.map((field) => {
-                        return <li key={field.id}>
-                            <span>{field.name}</span>
-                            <a style={removeLink} onClick={(e) => {
-                                e.preventDefault();
-                                onChange(fields.filter((f) => f !== field).map((f) => f.id));
-                            }}>remove</a>
-                        </li>;
-                    })}
-                </ul>
-            </div>
-        )}
+        {cursor.selectedFieldIds.length > 0 ? (
+            <Button onClick={() => onChange(fieldIds.concat(selectedFields.map((f) => f.id)))}>
+                Add {selectedFields.length === 1 ? `${selectedFields.length} selected field` : `${selectedFields.length} selected fields`}
+            </Button>
+        ) : ""}
+        <ul>
+            {fields.map((field) => {
+                return <li key={field.id}>
+                    <span>{field.name}</span>
+                    <a style={removeLink} onClick={(e) => {
+                        e.preventDefault();
+                        onChange(fields.filter((f) => f !== field).map((f) => f.id));
+                    }}>remove</a>
+                </li>;
+            })}
+        </ul>
     </div>;
 }
