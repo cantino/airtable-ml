@@ -10,6 +10,7 @@ import CSS from 'csstype';
 
 const removeLink: CSS.Properties = {
     marginLeft: '10px',
+    color: 'blue',
     cursor: 'pointer'
 };
 
@@ -39,18 +40,20 @@ export default function MultiFieldPicker({ table, fieldIds, onChange, skipFieldI
     let fields = fieldIds.map((id) => table.getFieldIfExists(id)).filter((f) => f);
 
     return <div>
-        {cursor.selectedFieldIds.length > 0 ? (
-            <Button onClick={() => onChange(fieldIds.concat(selectedFields.map((f) => f.id)))}>
-                Add {selectedFields.length === 1 ? `${selectedFields.length} selected field` : `${selectedFields.length} selected fields`}
-            </Button>
-        ) : ""}
+        <Button disabled={selectedFields.length === 0} onClick={() => onChange([...new Set(fieldIds.concat(selectedFields.map((f) => f.id)))])}>
+            {selectedFields.length === 0 ? (
+                <span>Click on valid Fields in the table to get started.</span>
+            ) : (
+                <span>Add {selectedFields.length === 1 ? `${selectedFields.length} selected field` : `${selectedFields.length} selected fields`}</span>
+            )}
+        </Button>
         <ul>
             {fields.map((field) => {
                 return <li key={field.id}>
                     <span>{field.name}</span>
                     <a style={removeLink} onClick={(e) => {
                         e.preventDefault();
-                        onChange(fields.filter((f) => f !== field).map((f) => f.id));
+                        onChange([...new Set(fields.filter((f) => f !== field).map((f) => f.id))]);
                     }}>remove</a>
                 </li>;
             })}

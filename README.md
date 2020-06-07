@@ -24,13 +24,8 @@ Video here!
 
 We'd love your open source contributions, especially in the following areas:
 
-* Cross Validation
 * Visualize error rate.
-* Allow stopping.
-* Allow configuration of values in an advanced mode.
-* Allow application to a different table.
-* Ensure all fields still exist in the table.
-* Ensure (early) that prediction and output fields are of the same type.
-* Ensure prediction and target column are different.
-* Ensure all columns still exist.
-* Only predict for empty values.
+* Cross Validation to provide a more accurate estimate of error.
+* Allow stopping of training.
+* Allow application to a different table by storing Field names instead of Ids.
+* Allow training of other types of models (interspectible decision trees, for example), and LSTM models for text generation. 

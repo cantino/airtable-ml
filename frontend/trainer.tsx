@@ -2,30 +2,7 @@ import React, {useState} from "react";
 import {Field, FieldType, Table, Record} from "@airtable/blocks/models";
 import brain, {INeuralNetworkJSON, INeuralNetworkState, NeuralNetwork} from "brain.js";
 import {Button, useRecords} from "@airtable/blocks/ui";
-
-interface TrainingOptions {
-    iterations?: number;
-}
-
-interface TrainerProps {
-    table: Table,
-    trainingField: Field,
-    outputField: Field,
-    trainingOptions: TrainingOptions,
-    featureFields: Array<Field>,
-    networkJSON: INeuralNetworkJSON | null,
-    fieldData: FieldData | null,
-    onTrained(netJSON: [INeuralNetworkJSON, FieldData]): void,
-}
-
-interface PredictorProps {
-    table: Table,
-    outputField: Field,
-    trainingField: Field,
-    featureFields: Array<Field>,
-    networkJSON: INeuralNetworkJSON,
-    fieldData: FieldData
-}
+import {TrainingOptions} from "./training-options-ui";
 
 interface NumericFieldInfoEntry {
     type: "numeric";
@@ -123,7 +100,7 @@ function fieldDataForType(type: FieldType): NumericFieldInfoEntry | CategoricalF
                 variants: {},
                 variantCount: 0,
                 parse: (s) => s ? s.id : '__missing__',
-                output: (string, field: Field) => {
+                output: (string, _field: Field) => {
                     return { name: string };
                     // if (field.options.choices) {
                     //     return (field.options.choices as any[]).find(({name}) => name === string).id;
@@ -152,7 +129,9 @@ function fieldDataForType(type: FieldType): NumericFieldInfoEntry | CategoricalF
     return result;
 }
 
-function makeTrainingData(table: Table, trainingField: Field, outputField: Field, featureFields: Field[], records: Record[]): [TrainingRows[], FieldData] {
+export function makeTrainingData(table: Table, trainingField: Field, outputField: Field, featureFields: Field[], records: Record[]): [TrainingRows[], FieldData] {
+    console.log("Making training data...");
+
     const fields = [...featureFields, trainingField];
     const fieldData: FieldData = {};
 
@@ -229,12 +208,22 @@ function makeTrainingData(table: Table, trainingField: Field, outputField: Field
     return [trainingRows, fieldData];
 }
 
-function predict(table: Table, trainingField: Field, outputField: Field, featureFields: Field[], records: Record[], fieldData: FieldData, network: NeuralNetwork) {
+interface PredictProps {
+    table: Table,
+    trainingField: Field,
+    outputField: Field,
+    featureFields: Field[],
+    records: Record[],
+    fieldData: FieldData,
+    network: NeuralNetwork,
+}
+
+function predict({ table, trainingField, outputField, featureFields, records, fieldData, network }: PredictProps) {
     const outputFieldEntry = fieldDataForType(outputField.type);
     const trainingFieldEntry = fieldData[trainingField.id];
 
     if (!outputFieldEntry || !trainingFieldEntry || outputFieldEntry.airtableType !== trainingFieldEntry.airtableType) {
-        throw new Error("Airtable ML: Training field and output field must have the same types, please reconfigure.");
+        throw new Error("Airtable ML: Training and output fields must have the same types, please reconfigure.");
     }
 
     featureFields.forEach((field: Field) => {
@@ -256,6 +245,9 @@ function predict(table: Table, trainingField: Field, outputField: Field, feature
     });
 
     records.forEach((record) => {
+        // Only compute for cells that don't already have a computed value.
+        if (record.getCellValue(outputField) !== null && record.getCellValue(outputField) !== undefined) return;
+
         const input = {};
         featureFields.forEach((field: Field) => {
             const fieldRecord = fieldData[field.id];
@@ -316,6 +308,17 @@ function predict(table: Table, trainingField: Field, outputField: Field, feature
     });
 }
 
+interface TrainerProps {
+    table: Table,
+    trainingField: Field,
+    outputField: Field,
+    featureFields: Array<Field>,
+    networkJSON: INeuralNetworkJSON | null,
+    fieldData: FieldData | null,
+    trainingOptions: TrainingOptions,
+    onTrained(netJSON: [INeuralNetworkJSON, FieldData]): void,
+}
+
 export function Trainer({ table, trainingField, outputField, featureFields, trainingOptions, networkJSON, fieldData, onTrained }: TrainerProps): JSX.Element {
     const [state, setState] = useState((networkJSON && fieldData) ? "Already trained — Click to retrain" : "Click to train");
     const fields = [...featureFields, trainingField];
@@ -324,32 +327,29 @@ export function Trainer({ table, trainingField, outputField, featureFields, trai
     const train = () => {
         try {
             const [trainingRows, fieldData] = makeTrainingData(table, trainingField, outputField, featureFields, records);
-            console.log(trainingRows);
-            console.log(fieldData);
-
-            const inputLayerSize = [...new Set(trainingRows.flatMap((row) => Object.keys(row.input)))].length;
-            const outputLayerSize = [...new Set(trainingRows.flatMap((row) => Object.keys(row.output)))].length;
-            console.log("Input layer size: ", inputLayerSize);
-            console.log("Input layer size: ", outputLayerSize);
 
             const net = new brain.NeuralNetworkGPU({
-                hiddenLayers: [Math.ceil((inputLayerSize + outputLayerSize) / 2)],
+                hiddenLayers: trainingOptions.hiddenLayers,
+                activation: trainingOptions.activation,
             });
-            const iterations = trainingOptions.iterations || 5000;
 
             net
                 .trainAsync(trainingRows, {
                     log: true,
-                    iterations,
-                    callback: (state: INeuralNetworkState) => setState(`Training... ${state.iterations} / ${iterations} iterations`),
-                    callbackPeriod: iterations / 100,
+                    iterations: trainingOptions.iterations,
+                    momentum: trainingOptions.momentum,
+                    learningRate: trainingOptions.learningRate,
+                    callback: (state: INeuralNetworkState) => setState(`Training... ${state.iterations} / ${trainingOptions.iterations} iterations`),
+                    callbackPeriod: trainingOptions.iterations / 100,
                 })
                 .then((res) => {
                     onTrained([net.toJSON(), fieldData]);
-                    console.log(`Training complete: ${res.error} in ${res.iterations} iterations`);
                     setState(`Trained (error = ${res.error}) — Click to retrain`);
                 })
-                .catch(e => alert(e));
+                .catch(e => {
+                    console.error(e);
+                    setState(`Error: ${e.message}`);
+                });
 
             setState("Training... this may take a few minutes. 😊");
         } catch(e) {
@@ -367,8 +367,17 @@ export function Trainer({ table, trainingField, outputField, featureFields, trai
     </div>;
 }
 
+interface PredictorProps {
+    table: Table,
+    outputField: Field,
+    trainingField: Field,
+    featureFields: Array<Field>,
+    networkJSON: INeuralNetworkJSON,
+    fieldData: FieldData,
+}
+
 export function Predictor({ table,  featureFields, networkJSON, fieldData, outputField, trainingField }: PredictorProps): JSX.Element {
-    const [network, setNetwork] = useState<NeuralNetwork>(() => (new brain.NeuralNetworkGPU()).fromJSON(networkJSON));
+    const [network,] = useState<NeuralNetwork>(() => (new brain.NeuralNetworkGPU()).fromJSON(networkJSON));
     const [state, setState] = useState("Click to generate predictions");
     const records = useRecords(table, { fields: [outputField, ...featureFields] });
 
@@ -376,7 +385,7 @@ export function Predictor({ table,  featureFields, networkJSON, fieldData, outpu
         setState("Processing...");
         setTimeout(() => {
             try {
-                predict(table, trainingField, outputField, featureFields, records, fieldData, network);
+                predict({ table, trainingField, outputField, featureFields, records, fieldData, network });
                 setState("Done. Click to generate predictions again.");
             } catch (e) {
                 if (e.message.startsWith("Airtable ML")) {
