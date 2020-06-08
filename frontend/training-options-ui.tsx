@@ -56,7 +56,7 @@ export function TrainingOptionsUI({ table, trainingField, outputField, featureFi
             console.log("Output layer size: ", outputLayerSize);
 
             onOptionsChange({
-                iterations: 5000,
+                iterations: 2000,
                 hiddenLayers: [Math.ceil((inputLayerSize + outputLayerSize) / 2)],
                 learningRate: 0.3,
                 momentum: 0.1,

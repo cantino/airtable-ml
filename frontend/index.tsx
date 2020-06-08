@@ -10,9 +10,10 @@ import {base, cursor} from '@airtable/blocks';
 import {useState} from 'react'
 import React from 'react';
 import Settings from './settings';
-import {FieldData, Predictor} from "./trainer";
+import {FieldData} from "./trainer";
 import {INeuralNetworkJSON} from "brain.js";
 import {TrainingOptions} from "./training-options-ui";
+import {PredictorUI} from "./predictor";
 
 function WelcomeView() {
     useLoadable(cursor)
@@ -31,7 +32,7 @@ function WelcomeView() {
 
     const featureFieldIds = (globalConfig.get('featureFieldIds') || []) as Array<string>;
     let featureFields = table && featureFieldIds && featureFieldIds.map((id) => table.getFieldIfExists(id));
-    if (featureFields.some((f) => !f)) featureFields = null;
+    if (featureFields && featureFields.some((f) => !f)) featureFields = null;
 
     const trainingOptionsString = globalConfig.get('trainingOptionsString');
     let trainingOptions: TrainingOptions | null;
@@ -47,27 +48,27 @@ function WelcomeView() {
 
     if (!table || !outputField || !trainingField || !featureFields || !networkJSON || !fieldData || !trainingOptions) {
         return <div>
-            <Heading>Airtable ML</Heading>
+            <Heading>Airtable ML 🧠</Heading>
             <Heading size="small">Welcome to Airtable ML! Click the settings icon in the upper right to get started.</Heading>
         </div>;
     }
 
     if (tableId !== cursor.activeTableId) {
         return <div>
-            <Heading>Airtable ML</Heading>
-            <Heading size="xsmall">Please switch to your '{table.name}' table or click on the settings icon in the upper right to select a new one.</Heading>
+            <Heading>Airtable ML 🧠</Heading>
+            <Heading size="xsmall">⚠️ Please switch to your '{table.name}' table or click on the settings icon in the upper right to select a new one.</Heading>
         </div>;
     }
 
     return <div>
-        <Heading>Airtable ML</Heading>
+        <Heading>Airtable ML 🧠</Heading>
 
         <Heading size="xsmall">
             Hello! 👋 Click the button below to calculate predictions for all empty values in the '{outputField.name}' Field.
             If you'd like to reconfigure Airtable ML, click the settings icon in the upper right.
         </Heading>
 
-        <Predictor
+        <PredictorUI
             featureFields={featureFields}
             trainingField={trainingField}
             outputField={outputField}
@@ -86,7 +87,7 @@ function MainWrapper() {
     });
 
     return <div style={ { margin: "10px" } }>
-        <ViewportConstraint minSize={{width: 325}} />
+        <ViewportConstraint minSize={{width: 400}} />
 
         {isShowingSettings ? <Settings /> : <WelcomeView />}
     </div>

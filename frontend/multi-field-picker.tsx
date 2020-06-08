@@ -2,8 +2,8 @@ import {
     useWatchable,
     useLoadable, Button,
 } from '@airtable/blocks/ui';
-import {cursor, base} from '@airtable/blocks';
-import {Field, FieldType, Table} from "@airtable/blocks/models";
+import {cursor} from '@airtable/blocks';
+import {FieldType, Table} from "@airtable/blocks/models";
 import React from 'react';
 import {FieldId} from "@airtable/blocks/types";
 import CSS from 'csstype';

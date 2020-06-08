@@ -1,10 +1,11 @@
-import React, {useState} from "react";
+import React, {useMemo, useState} from "react";
 import {Field, FieldType, Table, Record} from "@airtable/blocks/models";
 import brain, {INeuralNetworkJSON, INeuralNetworkState, NeuralNetwork} from "brain.js";
 import {Button, useRecords} from "@airtable/blocks/ui";
 import {TrainingOptions} from "./training-options-ui";
+import { Chart } from "react-charts";
 
-interface NumericFieldInfoEntry {
+export interface NumericFieldInfoEntry {
     type: "numeric";
     airtableType: FieldType;
     max: number;
@@ -13,11 +14,11 @@ interface NumericFieldInfoEntry {
     output(input: number, fd: NumericFieldInfoEntry): any;
 }
 
-interface CategoricalVariants {
+export interface CategoricalVariants {
     [propName: string]: number
 }
 
-interface CategoricalFieldInfoEntry {
+export interface CategoricalFieldInfoEntry {
     type: "categorical";
     airtableType: FieldType;
     parse(input: any): string | '__missing__';
@@ -30,14 +31,14 @@ export interface FieldData {
     [propName: string]: NumericFieldInfoEntry | CategoricalFieldInfoEntry
 }
 
-interface TrainingRows {
+export interface TrainingRows {
     input: object,
     output: object
 }
 
 const isNumber = value => typeof value === 'number' && value === value && value !== Infinity && value !== -Infinity;
 
-function fieldDataForType(type: FieldType): NumericFieldInfoEntry | CategoricalFieldInfoEntry {
+export function fieldDataForType(type: FieldType): NumericFieldInfoEntry | CategoricalFieldInfoEntry {
     let result = null;
     switch(type) {
         case FieldType.AUTO_NUMBER:
@@ -208,107 +209,7 @@ export function makeTrainingData(table: Table, trainingField: Field, outputField
     return [trainingRows, fieldData];
 }
 
-interface PredictProps {
-    table: Table,
-    trainingField: Field,
-    outputField: Field,
-    featureFields: Field[],
-    records: Record[],
-    fieldData: FieldData,
-    network: NeuralNetwork,
-}
-
-function predict({ table, trainingField, outputField, featureFields, records, fieldData, network }: PredictProps) {
-    const outputFieldEntry = fieldDataForType(outputField.type);
-    const trainingFieldEntry = fieldData[trainingField.id];
-
-    if (!outputFieldEntry || !trainingFieldEntry || outputFieldEntry.airtableType !== trainingFieldEntry.airtableType) {
-        throw new Error("Airtable ML: Training and output fields must have the same types, please reconfigure.");
-    }
-
-    featureFields.forEach((field: Field) => {
-        const freshEntry = fieldDataForType(field.type);
-        if (!freshEntry) return;
-
-        const oldEntry = fieldData[field.id];
-
-        if ((freshEntry && !oldEntry) || freshEntry.airtableType !== oldEntry.airtableType) {
-            throw new Error("Airtable ML: Table fields have changed, please retrain.");
-        }
-
-        // Copy the functions over because they don't serialize successfully.
-        Object.keys(freshEntry).forEach((key) => {
-            if (key === 'parse' || key === 'output') {
-                oldEntry[key] = freshEntry[key] as any;
-            }
-        });
-    });
-
-    records.forEach((record) => {
-        // Only compute for cells that don't already have a computed value.
-        if (record.getCellValue(outputField) !== null && record.getCellValue(outputField) !== undefined) return;
-
-        const input = {};
-        featureFields.forEach((field: Field) => {
-            const fieldRecord = fieldData[field.id];
-            if (!fieldRecord) return;
-
-            const cellValue = record.getCellValue(field);
-            const parsedValue = fieldRecord.parse(cellValue);
-            switch (fieldRecord.type) {
-                case "numeric":
-                    if (typeof parsedValue === "number") {
-                        input[field.id] = (parsedValue - fieldRecord.min) / (fieldRecord.max - fieldRecord.min);
-                    }
-                    break;
-                case "categorical":
-                    if (parsedValue !== "__missing__") {
-                        input[`${field.id}_${fieldRecord.variants[parsedValue]}`] = 1;
-                    }
-                    break;
-            }
-        });
-
-        const networkOutput = network.run(input);
-        console.log("input: ", input);
-        console.log("output: ", networkOutput);
-
-        let result;
-        if (outputFieldEntry.type === 'numeric') {
-            result = outputFieldEntry.output(Object.values(networkOutput)[0], trainingFieldEntry as NumericFieldInfoEntry);
-        } else {
-            let max: number = -Infinity;
-            let maxKey: null | string = null;
-            Object.keys(networkOutput).forEach((key) => {
-                if (networkOutput[key] > max) {
-                    max = networkOutput[key];
-                    maxKey = key;
-                }
-            })
-            console.log("Max key ", maxKey, " with ", max);
-
-            const tfe = trainingFieldEntry as CategoricalFieldInfoEntry;
-            const keyNumber = parseInt(maxKey.split('_').pop());
-
-            for (const key of Object.keys(tfe.variants)) {
-                if (tfe.variants[key] === keyNumber) {
-                    result = outputFieldEntry.output(key, outputField);
-                }
-            }
-
-            if (!result) {
-                console.warn("Unable to find matching variant for record ", record, " with network output ", networkOutput);
-            }
-        }
-
-        console.log(result);
-        if (table.hasPermissionToUpdateRecord(record, { [outputField.id]: result })) {
-            table.updateRecordAsync(record, { [outputField.id]: result }).catch((e) => console.error(e));
-        }
-    });
-}
-
-interface TrainerProps {
+interface TrainerUIProps {
     table: Table,
     trainingField: Field,
     outputField: Field,
@@ -319,87 +220,156 @@ interface TrainerProps {
     onTrained(netJSON: [INeuralNetworkJSON, FieldData]): void,
 }
 
-export function Trainer({ table, trainingField, outputField, featureFields, trainingOptions, networkJSON, fieldData, onTrained }: TrainerProps): JSX.Element {
-    const [state, setState] = useState((networkJSON && fieldData) ? "Already trained — Click to retrain" : "Click to train");
-    const fields = [...featureFields, trainingField];
-    const records = useRecords(table, { fields });
+interface TrainerTrainProps {
+    onProgress: (state: INeuralNetworkState) => void;
+    onDone: (state: INeuralNetworkState, net: NeuralNetwork, fieldData: FieldData) => void;
+    onError: (error: Error) => void;
+}
 
-    const train = () => {
+class Trainer {
+    private trainingRows: TrainingRows[];
+    private fieldData: FieldData;
+    public net: NeuralNetwork;
+    public stopping: boolean = false;
+    private ticks: number = 0;
+    private readonly totalTicks: number;
+    private iterationsPerTick: number;
+
+    constructor(readonly trainingOptions: TrainingOptions,
+                readonly table: Table,
+                readonly trainingField: Field,
+                readonly outputField: Field,
+                readonly featureFields: Field[],
+                readonly records: Record[]) {
+
+        console.log("Instantiating Trainer");
+
+        [this.trainingRows, this.fieldData] = makeTrainingData(table, trainingField, outputField, featureFields, records);
+
+        this.net = new brain.NeuralNetworkGPU({
+            hiddenLayers: trainingOptions.hiddenLayers,
+            activation: trainingOptions.activation,
+        });
+
+        this.totalTicks = 100;
+        this.iterationsPerTick = Math.ceil(this.trainingOptions.iterations / this.totalTicks);
+    }
+
+    train({ onProgress, onDone, onError }: TrainerTrainProps): void {
         try {
-            const [trainingRows, fieldData] = makeTrainingData(table, trainingField, outputField, featureFields, records);
-
-            const net = new brain.NeuralNetworkGPU({
-                hiddenLayers: trainingOptions.hiddenLayers,
-                activation: trainingOptions.activation,
-            });
-
-            net
-                .trainAsync(trainingRows, {
+            this.net
+                .trainAsync(this.trainingRows, {
                     log: true,
-                    iterations: trainingOptions.iterations,
-                    momentum: trainingOptions.momentum,
-                    learningRate: trainingOptions.learningRate,
-                    callback: (state: INeuralNetworkState) => setState(`Training... ${state.iterations} / ${trainingOptions.iterations} iterations`),
-                    callbackPeriod: trainingOptions.iterations / 100,
+                    iterations: this.iterationsPerTick,
+                    momentum: this.trainingOptions.momentum,
+                    learningRate: this.trainingOptions.learningRate,
                 })
-                .then((res) => {
-                    onTrained([net.toJSON(), fieldData]);
-                    setState(`Trained (error = ${res.error}) — Click to retrain`);
+                .then((state) => {
+                    this.ticks += 1;
+                    const asyncState = { error: state.error, iterations: this.ticks * this.iterationsPerTick };
+                    if (this.stopping || this.ticks >= this.totalTicks) {
+                        this.stopping = false;
+                        onDone(asyncState, this.net, this.fieldData);
+                    } else {
+                        onProgress(asyncState);
+                        this.train({ onProgress, onDone, onError });
+                    }
                 })
-                .catch(e => {
-                    console.error(e);
-                    setState(`Error: ${e.message}`);
+                .catch((error) => {
+                    this.stopping = false;
+                    onError(error);
                 });
-
-            setState("Training... this may take a few minutes. 😊");
         } catch(e) {
-            if (e.message.startsWith("Airtable ML")) {
-                setState(e.message);
-            } else {
-                console.error(e);
-                setState("Error");
-            }
+            this.stopping = false;
+            onError(e);
         }
     }
 
-    return <div>
-        <Button disabled={state.indexOf("Click") === -1} onClick={train}>{state}</Button>
-    </div>;
-}
-
-interface PredictorProps {
-    table: Table,
-    outputField: Field,
-    trainingField: Field,
-    featureFields: Array<Field>,
-    networkJSON: INeuralNetworkJSON,
-    fieldData: FieldData,
-}
-
-export function Predictor({ table,  featureFields, networkJSON, fieldData, outputField, trainingField }: PredictorProps): JSX.Element {
-    const [network,] = useState<NeuralNetwork>(() => (new brain.NeuralNetworkGPU()).fromJSON(networkJSON));
-    const [state, setState] = useState("Click to generate predictions");
-    const records = useRecords(table, { fields: [outputField, ...featureFields] });
-
-    const runPrediction = () => {
-        setState("Processing...");
-        setTimeout(() => {
-            try {
-                predict({ table, trainingField, outputField, featureFields, records, fieldData, network });
-                setState("Done. Click to generate predictions again.");
-            } catch (e) {
-                if (e.message.startsWith("Airtable ML")) {
-                    setState(e.message);
-                } else {
-                    console.error(e);
-                    setState("Error");
-                }
-            }
-        }, 10);
+    stop(): void {
+        this.stopping = true;
     }
-
-    return <div>
-        <Button disabled={state.indexOf("Processing") !== -1} onClick={runPrediction}>{state}</Button>
-    </div>;
 }
 
+export function TrainerUI({ table, trainingField, outputField, featureFields, trainingOptions, networkJSON, fieldData, onTrained }: TrainerUIProps): JSX.Element {
+    const [training, setTraining] = useState(false);
+    const [buttonMessage, setButtonMessage] = useState((networkJSON && fieldData) ? "Already trained — Click to retrain" : "Click to train");
+    const [errorHistory, setErrorHistory] = useState([]);
+    const fields = [...featureFields, trainingField];
+    const records = useRecords(table, { fields });
+
+    const trainer: Trainer = useMemo(() => new Trainer(
+        trainingOptions,
+        table,
+        trainingField,
+        outputField,
+        featureFields,
+        records,
+    ), []);
+
+    const train = () => {
+        setButtonMessage("Training... this may take a few minutes. 😊");
+        setTraining(true);
+        trainer.train({
+            onProgress: (state) => {
+                errorHistory.push([state.iterations, state.error]);
+                setErrorHistory(errorHistory);
+                setButtonMessage(`Training... ${state.iterations} / ${trainingOptions.iterations} iterations`);
+            },
+            onDone: (state, net, fieldData) => {
+                onTrained([net.toJSON(), fieldData]);
+                setButtonMessage(`Trained (error = ${state.error.toFixed(5)}) — Click to continue training`);
+                setTraining(false);
+            },
+            onError: (error) => {
+                if (error.message.startsWith("Airtable ML")) {
+                    setButtonMessage(error.message);
+                } else {
+                    console.error(error);
+                    setButtonMessage(`Error - Click to try again.`);
+                }
+                setTraining(false);
+            }
+        });
+    };
+
+    return <div>
+        <Button disabled={buttonMessage.indexOf("Click") === -1} onClick={train}>{buttonMessage}</Button>
+        <Button disabled={!training} onClick={() => {
+            setButtonMessage("Stopping...");
+            trainer.stop();
+        }}>Stop</Button>
+
+        {/* https://github.com/tannerlinsley/react-charts/issues/69 */}
+        <style dangerouslySetInnerHTML={{__html: `
+            .ChartContainer svg {
+                overflow: unset !important;
+            }
+        `}} />
+
+        {errorHistory.length ? (
+            <React.Fragment>
+                <div className='ChartContainer' style={{
+                    margin: '30px',
+                    width: '90%',
+                    height: '280px',
+                }}>
+                    <div>
+                        <strong>Error vs Iteration</strong>
+                    </div>
+                    <Chart data={[
+                        {
+                            label: 'Error Rate vs Iteration',
+                            data: errorHistory,
+                        }
+                    ]} axes={[
+                        { primary: true, type: 'linear', position: 'bottom' },
+                        { type: 'linear', position: 'left' },
+                    ]} />
+                </div>
+                <div>
+                    In general, you want to increase the number of iterations until the error rate starts to increase again, then stop.
+                </div>
+            </React.Fragment>
+        ) : ""}
+    </div>;
+}

@@ -7,7 +7,7 @@ import {
 } from '@airtable/blocks/ui';
 import {cursor, base} from '@airtable/blocks';
 import React, {useState} from 'react';
-import {FieldData, Trainer} from "./trainer";
+import {FieldData, TrainerUI} from "./trainer";
 import {INeuralNetworkJSON} from "brain.js";
 import MultiFieldPicker, {ACCEPTABLE_TYPES} from "./multi-field-picker";
 import Stepper from "./stepper";
@@ -31,7 +31,7 @@ export default function Settings(): JSX.Element {
 
     const featureFieldIds = (globalConfig.get('featureFieldIds') || []) as FieldId[];
     let featureFields = table && featureFieldIds && featureFieldIds.map((id) => table.getFieldIfExists(id));
-    if (featureFields.some((f) => !f)) featureFields = null;
+    if (featureFields && featureFields.some((f) => !f)) featureFields = null;
 
     const trainingOptionsString = globalConfig.get('trainingOptionsString');
     let trainingOptions: TrainingOptions | null;
@@ -169,7 +169,7 @@ export default function Settings(): JSX.Element {
             description: "Training the network will take a few minutes.",
             available: () => table && trainingField && outputField && featureFields && trainingOptions,
             render: () => {
-                return <Trainer
+                return <TrainerUI
                     table={table}
                     trainingField={trainingField}
                     outputField={outputField}
