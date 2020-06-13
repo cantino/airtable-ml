@@ -14,9 +14,10 @@ interface PredictProps {
     network: NeuralNetwork,
 }
 
-function predict({ table, trainingField, outputField, featureFields, records, fieldData, network }: PredictProps) {
+async function predict({ table, trainingField, outputField, featureFields, records, fieldData, network }: PredictProps) {
     const outputFieldEntry = fieldDataForType(outputField.type);
     const trainingFieldEntry = fieldData[trainingField.id];
+    const updates = [];
 
     if (!outputFieldEntry || !trainingFieldEntry || outputFieldEntry.airtableType !== trainingFieldEntry.airtableType) {
         throw new Error("Airtable ML: Training and output fields must have the same types, please reconfigure.");
@@ -97,11 +98,24 @@ function predict({ table, trainingField, outputField, featureFields, records, fi
             }
         }
 
-        console.log(result);
         if (table.hasPermissionToUpdateRecord(record, { [outputField.id]: result })) {
-            table.updateRecordAsync(record, { [outputField.id]: result }).catch((e) => console.error(e));
+            updates.push({
+                id: record.id,
+                fields: {
+                    [outputField.id]: result,
+                },
+            });
+            // table.updateRecordAsync(record, { [outputField.id]: result }).catch((e) => console.error(e));
         }
     });
+
+    const BATCH_SIZE = 50;
+    let i = 0;
+    while (i < updates.length) {
+        const recordBatch = updates.slice(i, i + BATCH_SIZE);
+        await table.updateRecordsAsync(recordBatch);
+        i += BATCH_SIZE;
+    }
 }
 
 interface PredictorUIProps {
@@ -120,9 +134,9 @@ export function PredictorUI({ table,  featureFields, networkJSON, fieldData, out
 
     const runPrediction = () => {
         setState("Processing...");
-        setTimeout(() => {
+        setTimeout(async () => {
             try {
-                predict({ table, trainingField, outputField, featureFields, records, fieldData, network });
+                await predict({ table, trainingField, outputField, featureFields, records, fieldData, network });
                 setState("Done. Click to generate predictions again.");
             } catch (e) {
                 if (e.message.startsWith("Airtable ML")) {
