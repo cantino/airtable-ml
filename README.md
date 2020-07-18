@@ -37,6 +37,15 @@ Here is a [tutorial video](https://www.youtube.com/watch?v=3N_15sWygA8) about Ai
 * [React](https://reactjs.org/)
 * [react-charts](https://react-charts.js.org/)
 
+## How to remix this block
+
+1. Create a new base (or you can use an existing base).
+
+2. Create a new block in your base (see [Create a new block](https://airtable.com/developers/blocks/guides/hello-world-tutorial#create-a-new-block),
+   selecting "Remix from Github" as your template.
+
+3. From the root of your new block, run `block run`.
+
 ## Contributing
 
 We'd love your open source contributions, especially in the following areas:
